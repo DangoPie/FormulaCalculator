@@ -1,0 +1,27 @@
+# Built artifacts
+*.apk
+*.ap_
+*.aab
+
+# Android
+*.iml
+.gradle
+/local.properties
+/.idea
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+/app/build
+
+# OS
+Thumbs.db
+*.swp
+*~
+
+# IDE
+.idea/
+*.iws
+*.ipr
+*.iml
