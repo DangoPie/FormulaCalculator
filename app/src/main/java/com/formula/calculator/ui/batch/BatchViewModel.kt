@@ -36,6 +36,14 @@ class BatchViewModel(application: Application) : AndroidViewModel(application) {
     private val _currentIndex = MutableStateFlow(0)
     val currentIndex: StateFlow<Int> = _currentIndex.asStateFlow()
 
+    // 当前展开的配方索引（-1表示全部收起）
+    private val _expandedIndex = MutableStateFlow(-1)
+    val expandedIndex: StateFlow<Int> = _expandedIndex.asStateFlow()
+
+    // 单个配方的单独目标量（临时覆盖）
+    private val _formulaOverrides = MutableStateFlow<Map<Long, Double>>(emptyMap())
+    val formulaOverrides: StateFlow<Map<Long, Double>> = _formulaOverrides.asStateFlow()
+
     // 当前配方的组分
     private val _currentIngredients = MutableStateFlow<List<Ingredient>>(emptyList())
     val currentIngredients: StateFlow<List<Ingredient>> = _currentIngredients.asStateFlow()
@@ -66,10 +74,10 @@ class BatchViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
-        // 当配方列表变化时，加载当前项的组分
+        // 当展开的配方变化时，加载该项的组分
         viewModelScope.launch {
-            combine(groupFormulas, _currentIndex) { formulas, idx ->
-                if (formulas.isNotEmpty() && idx < formulas.size) formulas[idx] else null
+            combine(groupFormulas, _expandedIndex) { formulas, idx ->
+                if (formulas.isNotEmpty() && idx >= 0 && idx < formulas.size) formulas[idx] else null
             }.collect { formula ->
                 if (formula != null) {
                     _currentIngredients.value = repository.getIngredientsByFormulaSync(formula.id)
@@ -105,10 +113,36 @@ class BatchViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * 切换配方展开/收起状态
+     */
+    fun toggleExpanded(index: Int) {
+        _expandedIndex.value = if (_expandedIndex.value == index) -1 else index
+        _currentIndex.value = index
+    }
+
+    /**
+     * 设置单个配方的单独目标量（覆盖全组目标量）
+     */
+    fun setFormulaTargetAmount(formulaId: Long, amount: Double) {
+        if (amount > 0) {
+            _formulaOverrides.value = _formulaOverrides.value + (formulaId to amount)
+        } else {
+            _formulaOverrides.value = _formulaOverrides.value - formulaId
+        }
+    }
+
+    /**
+     * 获取配方的有效目标量（优先使用单独设置的，否则用全组的）
+     */
+    fun getEffectiveTargetAmount(formula: Formula): Double {
+        return _formulaOverrides.value[formula.id] ?: formula.targetAmount
+    }
+
     fun toggleCompleted() {
         val formulas = groupFormulas.value
-        val idx = _currentIndex.value
-        if (idx < formulas.size) {
+        val idx = _expandedIndex.value
+        if (idx >= 0 && idx < formulas.size) {
             val formula = formulas[idx]
             viewModelScope.launch {
                 repository.updateCompleted(formula.id, !formula.isCompleted)

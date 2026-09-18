@@ -3,6 +3,7 @@ package com.formula.calculator.ui.calculator
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -35,6 +36,13 @@ fun CalculatorScreen(
     val snackbarMessage by viewModel.snackbarMessage.collectAsState()
 
     val snackbarHostState = remember { SnackbarHostState() }
+    val listState = rememberLazyListState()
+
+    LaunchedEffect(hasCalculated) {
+        if (hasCalculated && results.isNotEmpty()) {
+            listState.animateScrollToItem(4)
+        }
+    }
 
     LaunchedEffect(snackbarMessage) {
         snackbarMessage?.let {
@@ -50,6 +58,7 @@ fun CalculatorScreen(
         snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { padding ->
         LazyColumn(
+            state = listState,
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding),

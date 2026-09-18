@@ -1,6 +1,10 @@
 package com.formula.calculator.ui.batch
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -20,7 +24,9 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.formula.calculator.domain.CalculationResult
 import com.formula.calculator.domain.Formula
+import com.formula.calculator.domain.Ingredient
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -30,9 +36,7 @@ fun BatchScreen(
     val groups by viewModel.batchGroups.collectAsState()
     val selectedGroup by viewModel.selectedGroup.collectAsState()
     val formulas by viewModel.groupFormulas.collectAsState()
-    val currentIndex by viewModel.currentIndex.collectAsState()
-    val ingredients by viewModel.currentIngredients.collectAsState()
-    val results by viewModel.currentResults.collectAsState()
+    val expandedIndex by viewModel.expandedIndex.collectAsState()
     val targetAmount by viewModel.groupTargetAmount.collectAsState()
     val snackbarMessage by viewModel.snackbarMessage.collectAsState()
 
@@ -45,7 +49,6 @@ fun BatchScreen(
         }
     }
 
-    val currentFormula = formulas.getOrNull(currentIndex)
     val total = formulas.size
     val completedCount = formulas.count { it.isCompleted }
 
@@ -85,7 +88,6 @@ fun BatchScreen(
         snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { padding ->
         if (groups.isEmpty()) {
-            // 空状态
             Box(modifier = Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Icon(Icons.Filled.Assignment, contentDescription = null,
@@ -134,222 +136,241 @@ fun BatchScreen(
                     )
                 }
 
-                // 当前配方内容
-                if (currentFormula != null) {
-                    LazyColumn(
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                // 配方列表（手风琴展开式）
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    itemsIndexed(formulas) { idx, formula ->
+                        FormulaExpandableItem(
+                            formula = formula,
+                            index = idx,
+                            isExpanded = expandedIndex == idx,
+                            groupTargetAmount = targetAmount,
+                            onToggleExpand = { viewModel.toggleExpanded(idx) },
+                            onToggleCompleted = { viewModel.toggleCompleted() },
+                            onSetFormulaTargetAmount = { viewModel.setFormulaTargetAmount(formula.id, it) },
+                            getEffectiveTargetAmount = { viewModel.getEffectiveTargetAmount(formula) },
+                            viewModel = viewModel
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun FormulaExpandableItem(
+    formula: Formula,
+    index: Int,
+    isExpanded: Boolean,
+    groupTargetAmount: Double,
+    onToggleExpand: () -> Unit,
+    onToggleCompleted: () -> Unit,
+    onSetFormulaTargetAmount: (Double) -> Unit,
+    getEffectiveTargetAmount: () -> Double,
+    viewModel: BatchViewModel
+) {
+    val ingredients by viewModel.currentIngredients.collectAsState()
+    val effectiveTarget = getEffectiveTargetAmount()
+    val results = remember(ingredients, effectiveTarget) {
+        if (ingredients.isEmpty() || effectiveTarget <= 0) emptyList()
+        else calculateAmounts(ingredients, effectiveTarget)
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isExpanded) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.2f)
+            else if (formula.isCompleted) MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.2f)
+            else MaterialTheme.colorScheme.surface
+        )
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            // 标题行（可点击展开）
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onToggleExpand() },
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                    if (formula.isCompleted) {
+                        Icon(Icons.Filled.CheckCircle, contentDescription = null,
+                            modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
+                        Spacer(modifier = Modifier.width(8.dp))
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "#${index + 1} ${formula.name}",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis
+                        )
+                        if (formula.category.isNotEmpty()) {
+                            Text(formula.category,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.outline)
+                        }
+                    }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (effectiveTarget > 0) {
+                        Text(
+                            "${BatchViewModel.formatNum(effectiveTarget)}g",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                    }
+                    Icon(
+                        if (isExpanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.outline
+                    )
+                }
+            }
+
+            // 展开的内容
+            AnimatedVisibility(
+                visible = isExpanded,
+                enter = expandVertically(),
+                exit = shrinkVertically()
+            ) {
+                Column(modifier = Modifier.padding(top = 12.dp)) {
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+                    // 单独目标量设置
+                    var singleTargetText by remember(effectiveTarget) {
+                        mutableStateOf(if (effectiveTarget > 0) BatchViewModel.formatNum(effectiveTarget) else "")
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // 配方标题
-                        item {
+                        Text("单独目标量:", style = MaterialTheme.typography.labelMedium)
+                        OutlinedTextField(
+                            value = singleTargetText,
+                            onValueChange = { singleTargetText = it },
+                            modifier = Modifier.weight(1f),
+                            placeholder = { Text("留空使用全组") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            singleLine = true,
+                            textStyle = MaterialTheme.typography.bodySmall
+                        )
+                        Button(
+                            onClick = {
+                                val amount = singleTargetText.replace(",", "").toDoubleOrNull()
+                                if (amount != null && amount > 0) {
+                                    onSetFormulaTargetAmount(amount)
+                                } else if (singleTargetText.isBlank()) {
+                                    onSetFormulaTargetAmount(0.0)
+                                }
+                            },
+                            modifier = Modifier.height(40.dp)
+                        ) {
+                            Text("应用", style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // 组分清单和计算结果
+                    if (ingredients.isEmpty()) {
+                        Text("暂无组分数据", style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.outline)
+                    } else {
+                        Text(
+                            if (effectiveTarget > 0) "计算结果（目标 ${BatchViewModel.formatNum(effectiveTarget)}g）"
+                            else "组分清单（未设置目标量）",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+
+                        ingredients.forEachIndexed { idx, ingredient ->
+                            val result = results.getOrNull(idx)
                             Row(
-                                modifier = Modifier.fillMaxWidth(),
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        "#${currentIndex + 1} ${currentFormula.name}",
-                                        style = MaterialTheme.typography.headlineSmall,
-                                        fontWeight = FontWeight.Bold,
-                                        maxLines = 1, overflow = TextOverflow.Ellipsis
-                                    )
-                                    if (currentFormula.category.isNotEmpty()) {
-                                        Text(currentFormula.category,
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.primary)
-                                    }
-                                }
-                                Icon(
-                                    if (currentFormula.isCompleted) Icons.Filled.CheckCircle else Icons.Filled.RadioButtonUnchecked,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(32.dp),
-                                    tint = if (currentFormula.isCompleted) MaterialTheme.colorScheme.primary
-                                    else MaterialTheme.colorScheme.outline
+                                Text(
+                                    ingredient.name,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.weight(1f)
                                 )
-                            }
-                        }
-
-                        // 组分 + 计算结果
-                        item {
-                            Card(modifier = Modifier.fillMaxWidth()) {
-                                Column(modifier = Modifier.padding(16.dp)) {
-                                    if (targetAmount > 0) {
-                                        Text("计算结果（目标 ${BatchViewModel.formatNum(targetAmount)}g）",
-                                            style = MaterialTheme.typography.titleSmall)
-                                    } else {
-                                        Text("组分清单（未设置目标量）",
-                                            style = MaterialTheme.typography.titleSmall)
-                                    }
-                                    Spacer(modifier = Modifier.height(8.dp))
-
-                                    ingredients.forEachIndexed { idx, ingredient ->
-                                        val result = results.getOrNull(idx)
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
-                                            horizontalArrangement = Arrangement.SpaceBetween,
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Text(
-                                                ingredient.name,
-                                                style = MaterialTheme.typography.bodyLarge,
-                                                modifier = Modifier.weight(1f)
-                                            )
-                                            if (result != null) {
-                                                // 显示实际克数
-                                                Text(
-                                                    "${BatchViewModel.formatNum(result.amount)}g",
-                                                    style = MaterialTheme.typography.bodyLarge,
-                                                    fontWeight = FontWeight.Bold,
-                                                    color = MaterialTheme.colorScheme.primary
-                                                )
-                                                Text(
-                                                    "(${BatchViewModel.formatNum(result.adjustedRatio * 100)}%)",
-                                                    style = MaterialTheme.typography.bodySmall,
-                                                    color = MaterialTheme.colorScheme.outline
-                                                )
-                                            } else {
-                                                // 只显示占比
-                                                Text(
-                                                    "${BatchViewModel.formatNum(ingredient.ratio)}%",
-                                                    style = MaterialTheme.typography.bodyLarge,
-                                                    color = MaterialTheme.colorScheme.outline
-                                                )
-                                            }
-                                        }
-                                        if (idx < ingredients.size - 1) {
-                                            HorizontalDivider(modifier = Modifier.padding(vertical = 2.dp))
-                                        }
-                                    }
-
-                                    // 合计
-                                    HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween
-                                    ) {
-                                        Text("合计", style = MaterialTheme.typography.bodyLarge,
-                                            fontWeight = FontWeight.Bold)
-                                        if (results.isNotEmpty()) {
-                                            val totalAmount = results.sumOf { it.amount }
-                                            Text("${BatchViewModel.formatNum(totalAmount)}g",
-                                                style = MaterialTheme.typography.bodyLarge,
-                                                fontWeight = FontWeight.Bold,
-                                                color = MaterialTheme.colorScheme.primary)
-                                        } else {
-                                            val ratioTotal = ingredients.sumOf { it.ratio }
-                                            Text("${BatchViewModel.formatNum(ratioTotal)}%",
-                                                style = MaterialTheme.typography.bodyLarge,
-                                                fontWeight = FontWeight.Bold,
-                                                color = if (kotlin.math.abs(ratioTotal - 100) < 0.5)
-                                                    MaterialTheme.colorScheme.primary
-                                                else MaterialTheme.colorScheme.tertiary)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        // 操作按钮
-                        item {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Button(
-                                    onClick = { viewModel.toggleCompleted() },
-                                    modifier = Modifier.weight(1f),
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = if (currentFormula.isCompleted)
-                                            MaterialTheme.colorScheme.outline
-                                        else MaterialTheme.colorScheme.primary
-                                    )
-                                ) {
-                                    Icon(
-                                        if (currentFormula.isCompleted) Icons.Filled.Undo else Icons.Filled.Check,
-                                        contentDescription = null, modifier = Modifier.size(18.dp)
+                                if (result != null) {
+                                    Text(
+                                        "${BatchViewModel.formatNum(result.amount)}g",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.primary
                                     )
                                     Spacer(modifier = Modifier.width(8.dp))
-                                    Text(if (currentFormula.isCompleted) "标记未完成" else "标记已完成")
-                                }
-                            }
-                        }
-
-                        // 导航按钮
-                        item {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                OutlinedButton(
-                                    onClick = { viewModel.goToPrevious() },
-                                    enabled = currentIndex > 0,
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Icon(Icons.Filled.NavigateBefore, contentDescription = null)
-                                    Text("上一条")
-                                }
-                                Text(
-                                    "${currentIndex + 1} / $total",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    color = MaterialTheme.colorScheme.outline,
-                                    modifier = Modifier.align(Alignment.CenterVertically)
-                                )
-                                Button(
-                                    onClick = { viewModel.goToNext() },
-                                    enabled = currentIndex < total - 1,
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Text("下一条")
-                                    Icon(Icons.Filled.NavigateNext, contentDescription = null)
-                                }
-                            }
-                        }
-
-                        // 快速跳转列表
-                        item {
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text("快速跳转：", style = MaterialTheme.typography.labelMedium)
-                        }
-
-                        itemsIndexed(formulas) { idx, formula ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(
-                                        when {
-                                            idx == currentIndex -> MaterialTheme.colorScheme.primaryContainer
-                                            formula.isCompleted -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.3f)
-                                            else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
-                                        }
-                                    )
-                                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-                                    if (formula.isCompleted) {
-                                        Icon(Icons.Filled.CheckCircle, contentDescription = null,
-                                            modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                    }
                                     Text(
-                                        "#${idx + 1} ${formula.name}",
+                                        "(${BatchViewModel.formatNum(result.adjustedRatio * 100)}%)",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.outline
+                                    )
+                                } else {
+                                    Text(
+                                        "${BatchViewModel.formatNum(ingredient.ratio)}%",
                                         style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = if (idx == currentIndex) FontWeight.Bold else FontWeight.Normal,
-                                        maxLines = 1, overflow = TextOverflow.Ellipsis
+                                        color = MaterialTheme.colorScheme.outline
                                     )
                                 }
-                                if (idx != currentIndex) {
-                                    TextButton(onClick = { viewModel.goToIndex(idx) }) { Text("查看") }
-                                } else {
-                                    Text("当前", style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.primary)
-                                }
+                            }
+                            if (idx < ingredients.size - 1) {
+                                HorizontalDivider(modifier = Modifier.padding(vertical = 2.dp))
                             }
                         }
+
+                        // 合计
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("合计", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                            if (results.isNotEmpty()) {
+                                val totalAmount = results.sumOf { it.amount }
+                                Text("${BatchViewModel.formatNum(totalAmount)}g",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary)
+                            } else {
+                                val ratioTotal = ingredients.sumOf { it.ratio }
+                                Text("${BatchViewModel.formatNum(ratioTotal)}%",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.outline)
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // 操作按钮
+                    Button(
+                        onClick = onToggleCompleted,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (formula.isCompleted)
+                                MaterialTheme.colorScheme.outline
+                            else MaterialTheme.colorScheme.primary
+                        )
+                    ) {
+                        Icon(
+                            if (formula.isCompleted) Icons.Filled.Undo else Icons.Filled.Check,
+                            contentDescription = null, modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(if (formula.isCompleted) "标记未完成" else "标记已完成")
                     }
                 }
             }
@@ -383,7 +404,7 @@ fun TargetAmountBar(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("目标量（全组统一）", style = MaterialTheme.typography.labelMedium,
+                Text("全组目标量", style = MaterialTheme.typography.labelMedium,
                     modifier = Modifier.weight(1f))
                 Text("$formulaCount 个配方", style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.outline)
@@ -430,5 +451,22 @@ fun TargetAmountBar(
                 }
             }
         }
+    }
+}
+
+// 计算辅助函数
+private fun calculateAmounts(ingredients: List<Ingredient>, targetAmount: Double): List<CalculationResult> {
+    if (ingredients.isEmpty() || targetAmount <= 0) return emptyList()
+    val totalRatio = ingredients.sumOf { it.ratio }
+    if (totalRatio <= 0) return emptyList()
+    return ingredients.map { ing ->
+        val adjustedRatio = ing.ratio / totalRatio
+        CalculationResult(
+            ingredientName = ing.name,
+            originalRatio = ing.ratio,
+            adjustedRatio = adjustedRatio,
+            amount = adjustedRatio * targetAmount,
+            unit = "g"
+        )
     }
 }
