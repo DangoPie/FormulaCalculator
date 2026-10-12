@@ -174,7 +174,9 @@ fun FormulaExpandableItem(
     viewModel: BatchViewModel
 ) {
     val ingredients by viewModel.currentIngredients.collectAsState()
-    val effectiveTarget = getEffectiveTargetAmount()
+    val formulaOverrides by viewModel.formulaOverrides.collectAsState()
+    // 计算有效目标量：优先使用单独设置的，否则用全组的
+    val effectiveTarget = formulaOverrides[formula.id] ?: formula.targetAmount
     val results = remember(ingredients, effectiveTarget) {
         if (ingredients.isEmpty() || effectiveTarget <= 0) emptyList()
         else calculateAmounts(ingredients, effectiveTarget)
